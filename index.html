@@ -4,19 +4,19 @@
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
     <title>AR Gesture Shooter</title>
-    <script src="https://cdn.jsdelivr.net/npm/three@0.152.0/build/three.min.js"></script>
-    <script src="https://unpkg.com/@mediapipe/hands@0.4.1646424915/hands.js"></script>
-    <script src="https://unpkg.com/@mediapipe/drawing_utils@0.3.1646424915/drawing_utils.js"></script>
-    <script src="https://unpkg.com/@mediapipe/camera_utils@0.3.1646424915/camera_utils.js"></script>
+    <script src="https://cdnjs.cloudflare.com/ajax/libs/three.js/0.152.2/three.min.js"></script>
+    <script src="https://cdn.jsdelivr.net/npm/@mediapipe/hands/hands.js" crossorigin="anonymous"></script>
+    <script src="https://cdn.jsdelivr.net/npm/@mediapipe/drawing_utils/drawing_utils.js" crossorigin="anonymous"></script>
+    <script src="https://cdn.jsdelivr.net/npm/@mediapipe/camera_utils/camera_utils.js" crossorigin="anonymous"></script>
     <style>
         body { margin: 0; overflow: hidden; background: #000; font-family: sans-serif; }
         #game-canvas { position: absolute; top: 0; left: 0; width: 100%; height: 100%; z-index: 10; }
         #loading-overlay {
             position: fixed; top: 0; left: 0; width: 100%; height: 100%;
-            background: rgba(0,0,0,0.9); color: white; display: flex;
+            background: #111; color: white; display: flex;
             flex-direction: column; align-items: center; justify-content: center; z-index: 100;
         }
-        #ui { position: absolute; top: 20px; left: 20px; color: #0f0; z-index: 20; font-size: 24px; font-weight: bold; pointer-events: none; text-shadow: 2px 2px 4px #000; }
+        #ui { position: absolute; top: 20px; left: 20px; color: #0f0; z-index: 20; font-size: 28px; font-weight: bold; pointer-events: none; }
         .loader { border: 5px solid #333; border-top: 5px solid #0f0; border-radius: 50%; width: 50px; height: 50px; animation: spin 1s linear infinite; margin-bottom: 20px; }
         @keyframes spin { 0% { transform: rotate(0deg); } 100% { transform: rotate(360deg); } }
     </style>
@@ -25,7 +25,7 @@
 
     <div id="loading-overlay">
         <div class="loader"></div>
-        <div id="status">INITIALIZING AI...<br>(Please Allow Camera Access at the top)</div>
+        <div id="status">STAGE 1: Connecting to AI...<br>Please look for a Camera Popup!</div>
     </div>
 
     <div id="ui">SCORE: <span id="score">0</span></div>
@@ -33,11 +33,7 @@
     <canvas id="game-canvas"></canvas>
 
 <script>
-/** GAME SETTINGS **/
-const CONFIG = { targetCount: 4, assist: 2.5, shootDist: 0.05 };
-let score = 0, isReady = false, canFire = true, targets = [];
-
-/** THREE.JS ENGINE **/
+/** 1. INITIALIZE GAME ENGINE **/
 const scene = new THREE.Scene();
 const camera = new THREE.PerspectiveCamera(75, window.innerWidth / window.innerHeight, 0.1, 1000);
 const renderer = new THREE.WebGLRenderer({ canvas: document.getElementById('game-canvas'), alpha: true, antialias: true });
@@ -54,24 +50,22 @@ const laser = new THREE.Line(
 );
 scene.add(laser);
 
-/** TARGET LOGIC **/
+/** 2. TARGETS **/
+let targets = [], score = 0, isReady = false, canFire = true;
 function spawn() {
-    const disc = new THREE.Mesh(
-        new THREE.CylinderGeometry(0.5, 0.5, 0.1, 32),
-        new THREE.MeshPhongMaterial({ color: 0xffff00 })
-    );
+    const disc = new THREE.Mesh(new THREE.CylinderGeometry(0.5, 0.5, 0.1, 32), new THREE.MeshPhongMaterial({ color: 0xffff00 }));
     const a = Math.random() * 6.28;
-    disc.position.set(Math.cos(a)*15, Math.sin(a)*15, -10);
+    disc.position.set(Math.cos(a)*12, Math.sin(a)*12, -10);
     disc.rotation.x = 1.57;
     disc.userData.v = new THREE.Vector3().copy(disc.position).multiplyScalar(-0.005);
     scene.add(disc);
     targets.push(disc);
 }
 
-/** MEDIAPIPE AI **/
+/** 3. AI HAND TRACKING **/
 const video = document.getElementById('input-video');
 const hands = new Hands({
-    locateFile: (file) => `https://unpkg.com/@mediapipe/hands@0.4.1646424915/${file}`
+    locateFile: (file) => `https://cdn.jsdelivr.net/npm/@mediapipe/hands/${file}`
 });
 
 hands.setOptions({ maxNumHands: 1, modelComplexity: 1, minDetectionConfidence: 0.7 });
@@ -85,7 +79,7 @@ hands.onResults((res) => {
         const pts = res.multiHandLandmarks[0];
         const aim = new THREE.Vector3((0.5 - pts[8].x)*22, (0.5 - pts[8].y)*16, -10);
         
-        let lock = null, dMin = CONFIG.assist;
+        let lock = null, dMin = 2.5;
         targets.forEach(t => { 
             let d = aim.distanceTo(t.position);
             if(d < dMin) { dMin = d; lock = t; }
@@ -96,24 +90,35 @@ hands.onResults((res) => {
         laser.geometry.setFromPoints([new THREE.Vector3(0,-3,0), end]);
 
         const trigger = Math.hypot(pts[4].x - pts[5].x, pts[4].y - pts[5].y);
-        if (trigger < CONFIG.shootDist && canFire) {
-            shoot(lock, end);
+        if (trigger < 0.05 && canFire) {
+            if(lock) {
+                score += 10;
+                document.getElementById('score').innerText = score;
+                scene.remove(lock);
+                targets.splice(targets.indexOf(lock), 1);
+                spawn();
+            }
             canFire = false;
             setTimeout(() => canFire = true, 400);
         }
     }
 });
 
-/** INITIALIZE CAMERA **/
-if (window.Camera) {
-    const mpCam = new window.Camera(video, {
-        onFrame: async () => { await hands.send({image: video}); },
-        width: 1280, height: 720
-    });
-    mpCam.start();
+/** 4. START CAMERA (WITH FIX) **/
+function initCam() {
+    if (window.Camera) {
+        const mpCam = new window.Camera(video, {
+            onFrame: async () => { await hands.send({image: video}); },
+            width: 1280, height: 720
+        });
+        mpCam.start();
+    } else {
+        setTimeout(initCam, 500);
+    }
 }
+initCam();
 
-/** RENDER LOOP **/
+/** 5. MAIN LOOP **/
 function loop() {
     requestAnimationFrame(loop);
     targets.forEach(t => {
@@ -122,7 +127,7 @@ function loop() {
     });
     renderer.render(scene, camera);
 }
-for(let i=0; i<CONFIG.targetCount; i++) spawn();
+for(let i=0; i<4; i++) spawn();
 loop();
 </script>
 </body>

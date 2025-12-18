@@ -6,8 +6,8 @@
     <title>AR Gesture Shooter</title>
     <script src="https://cdn.jsdelivr.net/npm/three@0.152.0/build/three.min.js"></script>
     <script src="https://cdn.jsdelivr.net/npm/@mediapipe/hands@0.4.1646424915/hands.js" crossorigin="anonymous"></script>
-    <script src="https://cdn.jsdelivr.net/npm/@mediapipe/drawing_utils@0.3.1646424915/drawing_utils.js" crossorigin="anonymous"></script>
-    <script src="https://cdn.jsdelivr.net/npm/@mediapipe/camera_utils@0.3.1646424915/camera_utils.js" crossorigin="anonymous"></script>
+    <script src="https://cdn.jsdelivr.net/npm/@mediapipe/drawing_utils@0.3.1620248257/drawing_utils.js" crossorigin="anonymous"></script>
+    <script src="https://cdn.jsdelivr.net/npm/@mediapipe/camera_utils@0.3.1620247924/camera_utils.js" crossorigin="anonymous"></script>
     <style>
         body { margin: 0; overflow: hidden; background: #000; font-family: sans-serif; }
         #game-canvas { position: absolute; top: 0; left: 0; width: 100%; height: 100%; z-index: 10; }
@@ -25,7 +25,7 @@
 
     <div id="loading-overlay">
         <div class="loader"></div>
-        <div id="status">STAGE 1: Loading AI Brain...<br>Please check for a Camera Popup at the top!</div>
+        <div id="status">LOADING AI...<br>Check for a Camera Popup at the top!</div>
     </div>
 
     <div id="ui">SCORE: <span id="score">0</span></div>
@@ -35,7 +35,7 @@
 <script>
 /** GAME SETTINGS **/
 const CONFIG = { targetCount: 4, assist: 2.5, shootDist: 0.05 };
-let score = 0, isReady = false, canFire = true, targets = [], vfxs = [];
+let score = 0, isReady = false, canFire = true, targets = [];
 
 /** THREE.JS ENGINE **/
 const scene = new THREE.Scene();
@@ -104,30 +104,19 @@ hands.onResults((res) => {
     }
 });
 
-function shoot(target, pos) {
-    const ctx = new AudioContext();
-    const o = ctx.createOscillator();
-    const g = ctx.createGain();
-    o.connect(g); g.connect(ctx.destination);
-    o.frequency.value = target ? 600 : 200;
-    g.gain.exponentialRampToValueAtTime(0.01, ctx.currentTime + 0.1);
-    o.start(); o.stop(ctx.currentTime + 0.1);
-
-    if (target) {
-        score += 10;
-        document.getElementById('score').innerText = score;
-        scene.remove(target);
-        targets.splice(targets.indexOf(target), 1);
-        spawn();
+// Start Camera using the window utility
+const startCamera = () => {
+    if (typeof window.Camera !== 'undefined') {
+        const mpCam = new window.Camera(video, {
+            onFrame: async () => { await hands.send({image: video}); },
+            width: 1280, height: 720
+        });
+        mpCam.start();
+    } else {
+        setTimeout(startCamera, 500); // Retry if not loaded yet
     }
-}
-
-// Start Camera
-const mpCam = new window.Camera(video, {
-    onFrame: async () => { await hands.send({image: video}); },
-    width: 1280, height: 720
-});
-mpCam.start();
+};
+startCamera();
 
 /** RENDER LOOP **/
 function loop() {
@@ -140,6 +129,12 @@ function loop() {
 }
 for(let i=0; i<CONFIG.targetCount; i++) spawn();
 loop();
+
+window.addEventListener('resize', () => {
+    camera.aspect = window.innerWidth / window.innerHeight;
+    camera.updateProjectionMatrix();
+    renderer.setSize(window.innerWidth, window.innerHeight);
+});
 </script>
 </body>
 </html>

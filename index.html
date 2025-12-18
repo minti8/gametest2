@@ -3,132 +3,377 @@
 <head>
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
-    <title>AR Gesture Shooter</title>
-    <script src="https://cdnjs.cloudflare.com/ajax/libs/three.js/0.152.2/three.min.js"></script>
-    <script src="https://cdn.jsdelivr.net/npm/@mediapipe/hands/hands.js" crossorigin="anonymous"></script>
-    <script src="https://cdn.jsdelivr.net/npm/@mediapipe/drawing_utils/drawing_utils.js" crossorigin="anonymous"></script>
-    <script src="https://cdn.jsdelivr.net/npm/@mediapipe/camera_utils/camera_utils.js" crossorigin="anonymous"></script>
+    <title>Super Mario Jumper</title>
     <style>
-        body { margin: 0; overflow: hidden; background: #000; font-family: sans-serif; }
-        #game-canvas { position: absolute; top: 0; left: 0; width: 100%; height: 100%; z-index: 10; }
-        #loading-overlay {
-            position: fixed; top: 0; left: 0; width: 100%; height: 100%;
-            background: #111; color: white; display: flex;
-            flex-direction: column; align-items: center; justify-content: center; z-index: 100;
-        }
-        #ui { position: absolute; top: 20px; left: 20px; color: #0f0; z-index: 20; font-size: 28px; font-weight: bold; pointer-events: none; }
-        .loader { border: 5px solid #333; border-top: 5px solid #0f0; border-radius: 50%; width: 50px; height: 50px; animation: spin 1s linear infinite; margin-bottom: 20px; }
-        @keyframes spin { 0% { transform: rotate(0deg); } 100% { transform: rotate(360deg); } }
+        body { margin: 0; padding: 0; overflow: hidden; background: #87CEEB; font-family: Arial, sans-serif; }
+        canvas { display: block; cursor: none; }
     </style>
 </head>
 <body>
+    <canvas id="gameCanvas"></canvas>
+    <script>
+        const canvas = document.getElementById('gameCanvas');
+        const ctx = canvas.getContext('2d');
 
-    <div id="loading-overlay">
-        <div class="loader"></div>
-        <div id="status">STAGE 1: Connecting to AI...<br>Please look for a Camera Popup!</div>
-    </div>
+        let gameRunning = true;
+        let lives = 5;
+        let score = 0;
+        let invincible = 0;
+        let enemies = [];
+        let groundY = 0;
+        let mario = {};
+        let lastSpawn = 0;
+        let spawnInterval = 2.5;
+        let startTime = 0;
+        let keys = {};
+        let audioCtx = null;
 
-    <div id="ui">SCORE: <span id="score">0</span></div>
-    <video id="input-video" style="display:none" playsinline></video>
-    <canvas id="game-canvas"></canvas>
-
-<script>
-/** 1. INITIALIZE GAME ENGINE **/
-const scene = new THREE.Scene();
-const camera = new THREE.PerspectiveCamera(75, window.innerWidth / window.innerHeight, 0.1, 1000);
-const renderer = new THREE.WebGLRenderer({ canvas: document.getElementById('game-canvas'), alpha: true, antialias: true });
-renderer.setSize(window.innerWidth, window.innerHeight);
-
-const light = new THREE.PointLight(0xffffff, 2, 100);
-light.position.set(0, 10, 10);
-scene.add(light);
-scene.add(new THREE.AmbientLight(0xffffff, 0.5));
-
-const laser = new THREE.Line(
-    new THREE.BufferGeometry().setFromPoints([new THREE.Vector3(0,0,0), new THREE.Vector3(0,0,-10)]),
-    new THREE.LineBasicMaterial({ color: 0xff0000 })
-);
-scene.add(laser);
-
-/** 2. TARGETS **/
-let targets = [], score = 0, isReady = false, canFire = true;
-function spawn() {
-    const disc = new THREE.Mesh(new THREE.CylinderGeometry(0.5, 0.5, 0.1, 32), new THREE.MeshPhongMaterial({ color: 0xffff00 }));
-    const a = Math.random() * 6.28;
-    disc.position.set(Math.cos(a)*12, Math.sin(a)*12, -10);
-    disc.rotation.x = 1.57;
-    disc.userData.v = new THREE.Vector3().copy(disc.position).multiplyScalar(-0.005);
-    scene.add(disc);
-    targets.push(disc);
-}
-
-/** 3. AI HAND TRACKING **/
-const video = document.getElementById('input-video');
-const hands = new Hands({
-    locateFile: (file) => `https://cdn.jsdelivr.net/npm/@mediapipe/hands/${file}`
-});
-
-hands.setOptions({ maxNumHands: 1, modelComplexity: 1, minDetectionConfidence: 0.7 });
-
-hands.onResults((res) => {
-    if (!isReady && res.multiHandLandmarks) {
-        isReady = true;
-        document.getElementById('loading-overlay').style.display = 'none';
-    }
-    if (res.multiHandLandmarks && res.multiHandLandmarks[0]) {
-        const pts = res.multiHandLandmarks[0];
-        const aim = new THREE.Vector3((0.5 - pts[8].x)*22, (0.5 - pts[8].y)*16, -10);
-        
-        let lock = null, dMin = 2.5;
-        targets.forEach(t => { 
-            let d = aim.distanceTo(t.position);
-            if(d < dMin) { dMin = d; lock = t; }
-        });
-
-        let end = lock ? lock.position : aim;
-        laser.material.color.setHex(lock ? 0x00ff00 : 0xff0000);
-        laser.geometry.setFromPoints([new THREE.Vector3(0,-3,0), end]);
-
-        const trigger = Math.hypot(pts[4].x - pts[5].x, pts[4].y - pts[5].y);
-        if (trigger < 0.05 && canFire) {
-            if(lock) {
-                score += 10;
-                document.getElementById('score').innerText = score;
-                scene.remove(lock);
-                targets.splice(targets.indexOf(lock), 1);
-                spawn();
-            }
-            canFire = false;
-            setTimeout(() => canFire = true, 400);
+        function resizeCanvas() {
+            canvas.width = window.innerWidth;
+            canvas.height = window.innerHeight;
+            groundY = canvas.height * 0.85;
+            mario.x = Math.min(200, canvas.width * 0.18);
+            mario.y = groundY - 60;
+            mario.w = 45;
+            mario.h = 60;
+            mario.vy = 0;
+            mario.onGround = true;
         }
-    }
-});
 
-/** 4. START CAMERA (WITH FIX) **/
-function initCam() {
-    if (window.Camera) {
-        const mpCam = new window.Camera(video, {
-            onFrame: async () => { await hands.send({image: video}); },
-            width: 1280, height: 720
+        function init() {
+            resizeCanvas();
+            startTime = performance.now() / 1000;
+            lastSpawn = startTime;
+            enemies = [];
+            lives = 5;
+            score = 0;
+            invincible = 0;
+            gameRunning = true;
+            window.addEventListener('resize', resizeCanvas);
+            requestAnimationFrame(gameLoop);
+        }
+
+        function reset() {
+            resizeCanvas();
+            startTime = performance.now() / 1000;
+            lastSpawn = startTime;
+            enemies = [];
+            lives = 5;
+            score = 0;
+            invincible = 0;
+            gameRunning = true;
+        }
+
+        function playSound(freq, duration) {
+            if (!audioCtx) audioCtx = new (window.AudioContext || window.webkitAudioContext)();
+            const oscillator = audioCtx.createOscillator();
+            const gainNode = audioCtx.createGain();
+            oscillator.connect(gainNode);
+            gainNode.connect(audioCtx.destination);
+            oscillator.frequency.value = freq;
+            oscillator.type = 'square';
+            gainNode.gain.setValueAtTime(0.2, audioCtx.currentTime);
+            gainNode.gain.exponentialRampToValueAtTime(0.01, audioCtx.currentTime + duration / 1000);
+            oscillator.start(audioCtx.currentTime);
+            oscillator.stop(audioCtx.currentTime + duration / 1000);
+        }
+
+        function spawnEnemy() {
+            const types = [
+                { type: 'turtle', bodyColor: '#006400', shellColor: '#228B22', eyeColor: 'white', speed: 5 + Math.random() * 2, w: 40, h: 45 },
+                { type: 'goomba', bodyColor: '#8B4513', shellColor: '', eyeColor: '#FFD700', speed: 4 + Math.random() * 2, w: 38, h: 42 }
+            ];
+            const tp = types[Math.floor(Math.random() * types.length)];
+            enemies.push({
+                ...tp,
+                x: canvas.width + 60,
+                y: groundY - tp.h,
+                anim: 0
+            });
+        }
+
+        function update() {
+            const now = performance.now() / 1000;
+
+            if (gameRunning) {
+                // Spawn enemies
+                if (now - lastSpawn > spawnInterval) {
+                    spawnEnemy();
+                    lastSpawn = now;
+                    spawnInterval = Math.max(0.8, 2.5 - (now - startTime) * 0.0004);
+                }
+
+                // Mario physics
+                mario.vy += 0.75;
+                mario.y += mario.vy;
+                if (mario.y >= groundY - mario.h) {
+                    mario.y = groundY - mario.h;
+                    mario.vy = 0;
+                    mario.onGround = true;
+                } else {
+                    mario.onGround = false;
+                }
+
+                // Update enemies and collisions
+                for (let i = enemies.length - 1; i >= 0; i--) {
+                    const e = enemies[i];
+                    e.x -= e.speed;
+                    e.anim += 0.2;
+
+                    if (e.x < -e.w - 20) {
+                        enemies.splice(i, 1);
+                        continue;
+                    }
+
+                    if (invincible <= 0) {
+                        const dx = Math.abs(mario.x + mario.w / 2 - (e.x + e.w / 2));
+                        const dy = Math.abs(mario.y + mario.h / 2 - (e.y + e.h / 2));
+                        if (dx < (mario.w + e.w) / 2 && dy < (mario.h + e.h) / 2) {
+                            // Check for stomp (mario falling onto enemy top)
+                            if (mario.vy > 1 && mario.y + mario.h > e.y && mario.y + mario.h < e.y + 25 &&
+                                mario.x + mario.w / 2 > e.x && mario.x + mario.w / 2 < e.x + e.w) {
+                                // Stomp kill
+                                playSound(659, 120);
+                                score += 100;
+                                enemies.splice(i, 1);
+                            } else {
+                                // Player hit
+                                playSound(196, 250);
+                                lives--;
+                                invincible = 90;
+                                if (lives <= 0) {
+                                    gameRunning = false;
+                                }
+                                break;
+                            }
+                        }
+                    }
+                }
+
+                invincible = Math.max(0, invincible - 1);
+            } else if (keys['Space']) {
+                reset();
+            }
+        }
+
+        function renderBg() {
+            // Sky
+            const gradient = ctx.createLinearGradient(0, 0, 0, groundY);
+            gradient.addColorStop(0, '#87CEEB');
+            gradient.addColorStop(1, '#E0F6FF');
+            ctx.fillStyle = gradient;
+            ctx.fillRect(0, 0, canvas.width, groundY);
+
+            // Sun
+            ctx.fillStyle = 'yellow';
+            ctx.beginPath();
+            ctx.arc(canvas.width - 150, 100, 45, 0, Math.PI * 2);
+            ctx.fill();
+            ctx.strokeStyle = 'orange';
+            ctx.lineWidth = 5;
+            ctx.stroke();
+
+            // Ground
+            ctx.fillStyle = '#228B22';
+            ctx.fillRect(0, groundY, canvas.width, canvas.height - groundY);
+            ctx.fillStyle = '#32CD32';
+            for (let i = 0; i < canvas.width; i += 80) {
+                ctx.fillRect(i - (startTime * 20 % 80), groundY, 60, 30);
+            }
+        }
+
+        function drawMario(m) {
+            const x = m.x;
+            const y = m.y;
+            const w = m.w;
+            const h = m.h;
+
+            ctx.save();
+            ctx.translate(x, y);
+
+            // Hat
+            ctx.fillStyle = 'red';
+            ctx.fillRect(4, -2, 37, 14);
+            ctx.fillRect(10, 12, 25, 6);
+
+            // Hair
+            ctx.fillStyle = 'black';
+            ctx.fillRect(7, 6, 6, 7);
+            ctx.fillRect(32, 6, 6, 7);
+
+            // Face
+            ctx.fillStyle = '#FDBCB4';
+            ctx.fillRect(7, 15, 31, 18);
+
+            // Eyes
+            ctx.fillStyle = 'white';
+            ctx.fillRect(12, 20, 6, 6);
+            ctx.fillRect(27, 20, 6, 6);
+            ctx.fillStyle = 'black';
+            ctx.fillRect(13, 21, 4, 4);
+            ctx.fillRect(28, 21, 4, 4);
+
+            // Mustache
+            ctx.fillStyle = '#8B4513';
+            ctx.fillRect(15, 30, 15, 5);
+
+            // Shirt
+            ctx.fillStyle = 'red';
+            ctx.fillRect(4, 36, 37, 18);
+
+            // Buttons
+            ctx.fillStyle = 'yellow';
+            ctx.beginPath();
+            ctx.arc(17, 42, 3, 0, Math.PI * 2);
+            ctx.fill();
+            ctx.beginPath();
+            ctx.arc(28, 42, 3, 0, Math.PI * 2);
+            ctx.fill();
+
+            // Arms
+            ctx.fillStyle = '#FDBCB4';
+            ctx.fillRect(-12, 38, 16, 14);
+            ctx.fillRect(41, 38, 16, 14);
+            // Hands
+            ctx.fillStyle = '#FDBCB4';
+            ctx.fillRect(-6, 46, 12, 10);
+            ctx.fillRect(45, 46, 12, 10);
+
+            // Pants
+            ctx.fillStyle = 'navy';
+            ctx.fillRect(8, 54, 29, 12);
+
+            // Shoes
+            ctx.fillStyle = 'black';
+            ctx.fillRect(5, 62, 15, 10);
+            ctx.fillRect(25, 62, 15, 10);
+
+            ctx.restore();
+        }
+
+        function drawEnemy(e) {
+            ctx.save();
+            ctx.translate(e.x, e.y);
+
+            // Body
+            ctx.fillStyle = e.bodyColor;
+            ctx.fillRect(0, 5, e.w, e.h - 10);
+
+            // Eyes
+            ctx.fillStyle = e.eyeColor;
+            ctx.fillRect(4, 8, 8, 8);
+            ctx.fillRect(e.w - 12, 8, 8, 8);
+            ctx.fillStyle = 'black';
+            ctx.fillRect(5, 9, 5, 5);
+            ctx.fillRect(e.w - 11, 9, 5, 5);
+
+            if (e.type === 'turtle') {
+                // Shell
+                ctx.fillStyle = e.shellColor;
+                ctx.fillRect(3, e.h - 22, e.w - 6, 18);
+                ctx.strokeStyle = 'darkgreen';
+                ctx.lineWidth = 2;
+                ctx.strokeRect(5, e.h - 20, e.w - 10, 14);
+                // Shell spikes
+                ctx.fillStyle = 'darkgreen';
+                ctx.fillRect(12, e.h - 25, 4, 6);
+                ctx.fillRect(24, e.h - 25, 4, 6);
+            } else {
+                // Goomba feet
+                ctx.fillStyle = 'peru';
+                ctx.fillRect(2, e.h - 10, 12, 10);
+                ctx.fillRect(e.w - 14, e.h - 10, 12, 10);
+                // Walk bob
+                ctx.translate(0, Math.sin(e.anim) * 2);
+            }
+
+            ctx.restore();
+        }
+
+        function renderUI() {
+            ctx.textAlign = 'left';
+            ctx.strokeStyle = 'black';
+            ctx.lineWidth = 4;
+            ctx.fillStyle = 'white';
+            const fontSize = Math.min(48, canvas.height / 15);
+            ctx.font = `${fontSize}px Arial Black, Arial`;
+            ctx.strokeText(`Lives: ${lives}`, 50, 65);
+            ctx.fillText(`Lives: ${lives}`, 50, 65);
+
+            ctx.textAlign = 'center';
+            ctx.strokeText(`Score: ${score}`, canvas.width / 2, 65);
+            ctx.fillText(`Score: ${score}`, canvas.width / 2, 65);
+        }
+
+        function renderGameOver() {
+            ctx.fillStyle = 'rgba(0, 0, 0, 0.85)';
+            ctx.fillRect(0, 0, canvas.width, canvas.height);
+
+            ctx.textAlign = 'center';
+            ctx.fillStyle = 'white';
+            const bigFont = Math.min(120, canvas.height / 7);
+            ctx.font = `${bigFont}px Arial Black, Arial`;
+            ctx.fillText('GAME OVER', canvas.width / 2, canvas.height / 2 - 20);
+
+            const scoreFont = Math.min(48, canvas.height / 15);
+            ctx.font = `${scoreFont}px Arial`;
+            ctx.fillText(`Final Score: ${score}`, canvas.width / 2, canvas.height / 2 + 80);
+
+            const restartFont = Math.min(36, canvas.height / 20);
+            ctx.font = `${restartFont}px Arial`;
+            ctx.fillText('Press SPACEBAR to Restart', canvas.width / 2, canvas.height / 2 + 150);
+        }
+
+        function gameLoop() {
+            ctx.clearRect(0, 0, canvas.width, canvas.height);
+
+            update();
+
+            renderBg();
+
+            // Draw enemies
+            enemies.forEach(drawEnemy);
+
+            // Draw Mario (with flash if invincible)
+            if (invincible > 0 && Math.floor(invincible / 5) % 2 === 0) {
+                ctx.globalAlpha = 0.4;
+                drawMario(mario);
+                ctx.globalAlpha = 1.0;
+            } else {
+                drawMario(mario);
+            }
+
+            renderUI();
+
+            if (!gameRunning) {
+                renderGameOver();
+            }
+
+            requestAnimationFrame(gameLoop);
+        }
+
+        // Input handling
+        window.addEventListener('keydown', (e) => {
+            keys[e.code] = true;
+            if (e.code === 'Space') {
+                e.preventDefault();
+                if (gameRunning && mario.onGround) {
+                    mario.vy = -17;
+                    mario.onGround = false;
+                    playSound(523, 100);
+                }
+            }
         });
-        mpCam.start();
-    } else {
-        setTimeout(initCam, 500);
-    }
-}
-initCam();
 
-/** 5. MAIN LOOP **/
-function loop() {
-    requestAnimationFrame(loop);
-    targets.forEach(t => {
-        t.position.add(t.userData.v);
-        if (t.position.length() < 1) t.position.set((Math.random()-0.5)*20, (Math.random()-0.5)*20, -10);
-    });
-    renderer.render(scene, camera);
-}
-for(let i=0; i<4; i++) spawn();
-loop();
-</script>
+        window.addEventListener('keyup', (e) => {
+            keys[e.code] = false;
+        });
+
+        // Prevent context menu on right click
+        window.addEventListener('contextmenu', (e) => e.preventDefault());
+
+        // Start the game
+        init();
+    </script>
 </body>
 </html>
